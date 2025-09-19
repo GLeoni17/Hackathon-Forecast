@@ -27,6 +27,17 @@ from joblib import dump, load
 import json
 import time
 import warnings
+# Adicione esses imports
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Conv1D, MaxPooling1D, Flatten
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.multioutput import MultiOutputRegressor
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from pycaret.time_series import *
 warnings.filterwarnings('ignore')
 
 def wmape(y_true, y_pred):
@@ -314,6 +325,7 @@ def train_models(X_train, y_train, X_val, y_val, features):
     results['decision_tree'] = {'wmape': wmape_dt, 'time': time.time() - start_time}
     print(f"Decision Tree - WMAPE: {wmape_dt:.2f}%, Tempo: {results['decision_tree']['time']:.1f}s")
 
+    '''
     # 12. AdaBoost
     print("Treinando AdaBoost...")
     start_time = time.time()
@@ -334,7 +346,7 @@ def train_models(X_train, y_train, X_val, y_val, features):
     models['adaboost'] = ada_model
     results['adaboost'] = {'wmape': wmape_ada, 'time': time.time() - start_time}
     print(f"AdaBoost - WMAPE: {wmape_ada:.2f}%, Tempo: {results['adaboost']['time']:.1f}s")
-
+    '''
     # 13. Extra Trees
     print("Treinando Extra Trees...")
     start_time = time.time()
@@ -389,6 +401,219 @@ def train_models(X_train, y_train, X_val, y_val, features):
     models['dummy'] = dummy_model
     results['dummy'] = {'wmape': wmape_dummy, 'time': time.time() - start_time}
     print(f"Dummy - WMAPE: {wmape_dummy:.2f}%, Tempo: {results['dummy']['time']:.1f}s")
+
+    '''
+    # 16. LSTM
+    print("Treinando LSTM...")
+    start_time = time.time()
+
+    # Preparar dados para LSTM (3D: [samples, timesteps, features])
+    def create_sequences(X, y, time_steps=10):
+        Xs, ys = [], []
+        for i in range(len(X) - time_steps):
+            Xs.append(X[i:(i + time_steps)])
+            ys.append(y[i + time_steps])
+        return np.array(Xs), np.array(ys)
+
+    # Criar sequências temporais
+    time_steps = 8
+    X_train_seq, y_train_seq = create_sequences(X_train_scaled, y_train, time_steps)
+    X_val_seq, y_val_seq = create_sequences(X_val_scaled, y_val, time_steps)
+
+    # Modelo LSTM
+    lstm_model = Sequential([
+        LSTM(64, activation='relu', input_shape=(time_steps, X_train_scaled.shape[1]), return_sequences=True),
+        Dropout(0.2),
+        LSTM(32, activation='relu'),
+        Dropout(0.2),
+        Dense(16, activation='relu'),
+        Dense(1)
+    ])
+
+    lstm_model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+
+
+
+    # Treinar
+    history = lstm_model.fit(
+        X_train_seq, y_train_seq,
+        epochs=50,
+        batch_size=32,
+        validation_data=(X_val_seq, y_val_seq),
+        verbose=0,
+        callbacks=[EarlyStopping(patience=10, restore_best_weights=True)]
+    )
+
+    # Prever
+    preds_lstm = lstm_model.predict(X_val_seq, verbose=0).flatten()
+    preds_lstm = np.clip(preds_lstm, 0, None)
+    wmape_lstm = wmape(y_val[time_steps:], preds_lstm)
+
+    models['lstm'] = lstm_model
+    results['lstm'] = {'wmape': wmape_lstm, 'time': time.time() - start_time}
+    print(f"LSTM - WMAPE: {wmape_lstm:.2f}%, Tempo: {results['lstm']['time']:.1f}s")
+    '''
+    # 17. CNN 1D
+    print("Treinando CNN 1D...")
+    start_time = time.time()
+
+    cnn_model = Sequential([
+        Conv1D(64, kernel_size=3, activation='relu', input_shape=(time_steps, X_train_scaled.shape[1])),
+        MaxPooling1D(pool_size=2),
+        Conv1D(32, kernel_size=3, activation='relu'),
+        MaxPooling1D(pool_size=2),
+        Flatten(),
+        Dense(32, activation='relu'),
+        Dropout(0.3),
+        Dense(1)
+    ])
+
+    cnn_model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+
+    history = cnn_model.fit(
+        X_train_seq, y_train_seq,
+        epochs=50,
+        batch_size=32,
+        validation_data=(X_val_seq, y_val_seq),
+        verbose=0,
+        callbacks=[EarlyStopping(patience=10, restore_best_weights=True)]
+    )
+
+    preds_cnn = cnn_model.predict(X_val_seq, verbose=0).flatten()
+    preds_cnn = np.clip(preds_cnn, 0, None)
+    wmape_cnn = wmape(y_val[time_steps:], preds_cnn)
+
+    models['cnn'] = cnn_model
+    results['cnn'] = {'wmape': wmape_cnn, 'time': time.time() - start_time}
+    print(f"CNN 1D - WMAPE: {wmape_cnn:.2f}%, Tempo: {results['cnn']['time']:.1f}s")
+
+    # 18. MLP Profundo
+    print("Treinando MLP Profundo...")
+    start_time = time.time()
+
+    deep_mlp_model = MLPRegressor(
+        hidden_layer_sizes=(256, 128, 64, 32),
+        activation='relu',
+        solver='adam',
+        alpha=0.001,
+        learning_rate_init=0.0001,
+        max_iter=300,
+        random_state=42,
+        early_stopping=True,
+        validation_fraction=0.1
+    )
+
+    deep_mlp_model.fit(X_train_scaled, y_train)
+    preds_deep_mlp = deep_mlp_model.predict(X_val_scaled)
+    preds_deep_mlp = np.clip(preds_deep_mlp, 0, None)
+    wmape_deep_mlp = wmape(y_val, preds_deep_mlp)
+
+    models['deep_mlp'] = deep_mlp_model
+    results['deep_mlp'] = {'wmape': wmape_deep_mlp, 'time': time.time() - start_time}
+    print(f"Deep MLP - WMAPE: {wmape_deep_mlp:.2f}%, Tempo: {results['deep_mlp']['time']:.1f}s")
+
+    # 19. ARIMA
+    print("Treinando ARIMA...")
+    start_time = time.time()
+
+    # Para séries temporais univariadas (usando a média por semana)
+    try:
+        time_series = train.groupby('week_start')['quantity'].mean().values
+        
+        arima_model = ARIMA(time_series, order=(2,1,2))
+        arima_fit = arima_model.fit()
+        
+        # Prever para o período de validação
+        preds_arima = arima_fit.forecast(steps=len(val['week_start'].unique()))
+        preds_arima = np.clip(preds_arima, 0, None)
+        
+        # Mapear para todas as linhas (simplificado)
+        wmape_arima = wmape(val['quantity'], np.repeat(preds_arima.mean(), len(val)))
+        
+        models['arima'] = arima_fit
+        results['arima'] = {'wmape': wmape_arima, 'time': time.time() - start_time}
+        print(f"ARIMA - WMAPE: {wmape_arima:.2f}%, Tempo: {results['arima']['time']:.1f}s")
+        
+    except Exception as e:
+        print(f"ARIMA falhou: {e}")
+        results['arima'] = {'wmape': np.nan, 'time': time.time() - start_time}
+
+    # 20. Exponential Smoothing
+    print("Treinando Exponential Smoothing...")
+    start_time = time.time()
+
+    try:
+        es_model = ExponentialSmoothing(
+            time_series,
+            seasonal_periods=52,
+            trend='add',
+            seasonal='add'
+        )
+        es_fit = es_model.fit()
+        
+        preds_es = es_fit.forecast(steps=len(val['week_start'].unique()))
+        preds_es = np.clip(preds_es, 0, None)
+        
+        wmape_es = wmape(val['quantity'], np.repeat(preds_es.mean(), len(val)))
+        
+        models['exp_smoothing'] = es_fit
+        results['exp_smoothing'] = {'wmape': wmape_es, 'time': time.time() - start_time}
+        print(f"Exp Smoothing - WMAPE: {wmape_es:.2f}%, Tempo: {results['exp_smoothing']['time']:.1f}s")
+        
+    except Exception as e:
+        print(f"Exponential Smoothing falhou: {e}")
+        results['exp_smoothing'] = {'wmape': np.nan, 'time': time.time() - start_time}
+
+    # 21. Stacking Ensemble
+    print("Treinando Stacking Ensemble...")
+    start_time = time.time()
+
+    from sklearn.ensemble import StackingRegressor
+
+    # Definir base learners
+    base_learners = [
+        ('ridge', Ridge()),
+        ('rf', RandomForestRegressor(n_estimators=50, random_state=42)),
+        ('xgb', XGBRegressor(n_estimators=100, random_state=42))
+    ]
+
+    stacking_model = StackingRegressor(
+        estimators=base_learners,
+        final_estimator=GradientBoostingRegressor(random_state=42),
+        n_jobs=-1
+    )
+
+    stacking_model.fit(X_train_scaled, y_train)
+    preds_stacking = stacking_model.predict(X_val_scaled)
+    preds_stacking = np.clip(preds_stacking, 0, None)
+    wmape_stacking = wmape(y_val, preds_stacking)
+
+    models['stacking'] = stacking_model
+    results['stacking'] = {'wmape': wmape_stacking, 'time': time.time() - start_time}
+    print(f"Stacking - WMAPE: {wmape_stacking:.2f}%, Tempo: {results['stacking']['time']:.1f}s")
+
+    # 22. Voting Ensemble
+    print("Treinando Voting Ensemble...")
+    start_time = time.time()
+
+    from sklearn.ensemble import VotingRegressor
+
+    voting_model = VotingRegressor([
+        ('ridge', Ridge()),
+        ('xgb', XGBRegressor(n_estimators=100, random_state=42)),
+        ('lgb', lgb.LGBMRegressor(n_estimators=100, random_state=42))
+    ])
+
+    voting_model.fit(X_train_scaled, y_train)
+    preds_voting = voting_model.predict(X_val_scaled)
+    preds_voting = np.clip(preds_voting, 0, None)
+    wmape_voting = wmape(y_val, preds_voting)
+
+    models['voting'] = voting_model
+    results['voting'] = {'wmape': wmape_voting, 'time': time.time() - start_time}
+    print(f"Voting - WMAPE: {wmape_voting:.2f}%, Tempo: {results['voting']['time']:.1f}s")
+
+    
             
     return models, results
 
@@ -447,7 +672,7 @@ if __name__=='__main__':
     y_val   = val['quantity'].values
     
     # Treinar modelos
-    print("\n=== TREINANDO 7 MODELOS DIFERENTES ===")
+    print("\n=== TREINANDO MODELOS DIFERENTES ===")
     models, results = train_models(X_train, y_train, X_val, y_val, features)
     
     # Resultados
