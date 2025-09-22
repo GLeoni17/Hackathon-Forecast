@@ -1,58 +1,63 @@
 import pandas as pd
+from pathlib import Path
+
+absolute_path = Path.cwd()
 
 def create_weekly():
-    pdv = pd.read_parquet("/home/luanguerra/Teste/data/pdv.parquet")
-    transacao = pd.read_parquet("/home/luanguerra/Teste/data/transacao.parquet")
-    produto = pd.read_parquet("/home/luanguerra/Teste/data/produto.parquet")
     
+    print('Carregando arquivos de treino...')
+    #Leitura dos arquivos de treino
+    pdv = pd.read_parquet(Path.joinpath(absolute_path,"data/part-00000-tid-2779033056155408584-f6316110-4c9a-4061-ae48-69b77c7c8c36-4-1-c000.snappy.parquet"))
+    transacao = pd.read_parquet(Path.joinpath(absolute_path,"data/part-00000-tid-5196563791502273604-c90d3a24-52f2-4955-b4ec-fb143aae74d8-4-1-c000.snappy.parquet"))
+    produto = pd.read_parquet(Path.joinpath(absolute_path,"data/part-00000-tid-7173294866425216458-eae53fbf-d19e-4130-ba74-78f96b9675f1-4-1-c000.snappy.parquet"))
+    
+    print('Arquivos carregados!')
+    
+    #Converter data das transações para o tipo DateTime
     transacao['transaction_date'] = pd.to_datetime(transacao['transaction_date'])
     
+    #Renomeação das colunas para ficar mais organizado
     transacao = transacao.rename(columns={
     'internal_store_id':'pdv_id',
-    'internal_product_id':'produto_id',
-    'quantity':'quantity',
-    'gross_value':'gross_value',
-    'net_value':'net_value'
+    'internal_product_id':'produto_id'
     })
     
     pdv = pdv.rename(columns={'pdv':'pdv_id'})
     produto = produto.rename(columns={'produto':'produto_id'})
     
+    print('Criando weekly.parquet com as transações e suas quantidades...')
+    
+    #Realiza um Merge na tabela 'transacao' com as outras tabelas, a fim de agregar as colunas por pdv
+    # e id do produto
     transacao = transacao.merge(pdv, left_on='pdv_id', right_on='pdv_id', how='left')
     transacao = transacao.merge(produto, left_on='produto_id', right_on='produto_id', how='left')
     
+    #Substitui os dados NaN por 'unknowm' a fim de evitar erros
     for c in ['categoria_pdv','premise','zipcode']:
         if c in transacao.columns:
             transacao[c] = transacao[c].fillna('unknown')
     
-    #transacao.to_parquet('transacaoV2.parquet', index=False)
-    
+    #Transforma as datas de transação para o começo da semana, com isso é possível agregar as vendas por semana
+    # com mais facilidade
     transacao['week_start'] = transacao['transaction_date'] - pd.to_timedelta(transacao['transaction_date'].dt.weekday, unit='d')
     
+    #Agrega as vendas pela tripla (week_start, pdv_id, produto_id), somando os valores dos lucros e quantidades
+    # de venda para ter as informações de vendas das semanas
     weekly = (transacao.groupby(['week_start','pdv_id','produto_id'], as_index=False)
                 .agg(quantity=('quantity','sum'),
                     gross_value=('gross_value','sum'),
                     net_value=('net_value','sum'),
                     transactions=('quantity','size')))
     
+    #Transforma a tabela no tipo DataFrame e salva 
     weekly = pd.DataFrame(weekly)
-    weekly.to_parquet('/home/luanguerra/Teste/data/weekly.parquet', index=False)
+    weekly.to_parquet(Path.joinpath(absolute_path,"data/weekly.parquet"), index=False)
     
-    all_weeks = pd.DataFrame({'week_start': pd.date_range("2022-01-03","2022-12-26",freq='7D')})
-    pdv_prod = transacao[['pdv_id','produto_id']].drop_duplicates()
-    full_index = pdv_prod.merge(all_weeks, how='cross')
-    weekly_full = full_index.merge(weekly, on=['pdv_id','produto_id','week_start'], how='left').fillna({'quantity':0, 'gross_value':0, 'net_value':0, 'transactions':0})
+    print('weekly.parquet criado e salvo em: ', Path.joinpath(absolute_path,"data/weekly.parquet"))
     
-    for c in ['pdv_id','produto_id','categoria_pdv','categoria','marca','fabricante']:
-        if c in weekly_full.columns:
-            weekly_full[c] = weekly_full[c].astype('category')
-            
-    weekly_full['quantity'] = pd.to_numeric(weekly_full['quantity'], downcast='integer')
-    
-    weekly_full = pd.DataFrame(weekly_full)
-    weekly.to_parquet('/home/luanguerra/Teste/data/weekly_full.parquet', index=False, compression='snappy')
+    #O parquet 'weekly' contém as vendas dos produtos considerando todas as semanas que apareceram no
+    # dataframe 'transação'
     
 if __name__=='__main__':
-    #create_weekly()
-    df = pd.read_parquet("/home/luanguerra/Teste/data/weekly_train.parquet")
-    print(df['week_start'])
+    #Cria o df weekly
+    create_weekly()
